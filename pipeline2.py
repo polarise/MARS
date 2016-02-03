@@ -1,0 +1,110 @@
+#!/home/paulk/software/bin/python
+from __future__ import division
+import sys
+import cPickle
+import pysam
+from key_functions import *
+
+try:
+	label = sys.argv[1]
+except IndexError:
+	print >> sys.stderr,"Error!"
+	sys.exit(1)
+
+unwanted = ['#','p','t']
+
+if label == 'RP':
+	#f = open("/home/paulk/MARS/2_intermediate_data/RP_dabg_passed.common.pic")
+	f = open("/home/paulk/MARS/2_intermediate_data/RP_probe_intensities.pic")
+elif label == 'YRI':
+	#f = open("/home/paulk/MARS/2_intermediate_data/YRI_dabg_passed.common.pic")
+#	f = open("/home/paulk/MARS/2_intermediate_data/YRI_probe_intensities.pic")
+	f = open("/home/paulk/MARS/2_intermediate_data/YRI_intensities_core_quantnorm_pmgcbg.pic")
+elif label == 'CEU':
+	#f = open("/home/paulk/MARS/2_intermediate_data/CEU_dabg_passed.common.pic")
+#	f = open("/home/paulk/MARS/2_intermediate_data/CEU_probe_intensities.pic")
+	f = open("/home/paulk/MARS/2_intermediate_data/CEU_intensities_core_quantnorm_pmgcbg.pic")
+else:
+	sys.exit(1)
+probe_intensities = cPickle.load(f)
+f.close()
+
+if label == 'YRI':
+	samples = map(lambda(x):x.strip(),open("/home/paulk/MARS/0_prep_data/YRI_names.txt").readlines())
+elif label == 'CEU':
+	samples = map(lambda(x):x.strip(),open("/home/paulk/MARS/0_prep_data/CEU_names.txt").readlines())
+
+rna_seq_data = dict()
+
+# for each of the rna-seq data files
+# we will use the coordinates given to ensure that we treat each gene even it occurs multiple times
+if label == 'RP':
+	for s in xrange(3,11):
+		f = open("/data2/paulk/RP/output2/%sC/Genic/genes.fpkm_tracking" % s)
+		for row in f:
+			if row[0] in unwanted: continue
+			l = row.strip().split('\t')
+			feat = l[0]
+			if (feat,l[6]) not in rna_seq_data:
+				rna_seq_data[feat,l[6]] = [float(l[9])]    # we're using the coordinates (l[6]) to make each key unique
+			else:
+				rna_seq_data[feat,l[6]] += [float(l[9])]
+		f.close()
+elif label == 'YRI':
+	for s in samples:
+		#f = open("/data2/paulk/RP/output2/%sC/Genic/genes.fpkm_tracking" % s)
+	#  f = open("/data1/paulk/%s/isoforms.fpkm_tracking" % s)
+		f = open("/data1/paulk/%s/genes.fpkm_tracking" % s)
+		for row in f:
+			if row[0] in unwanted: continue
+			l = row.strip().split('\t')
+			feat = l[0]
+			if (feat,l[6]) not in rna_seq_data:
+				rna_seq_data[feat,l[6]] = [float(l[9])]    # we're using the coordinates (l[6]) to make each key unique
+			else:
+				rna_seq_data[feat,l[6]] += [float(l[9])]
+		f.close()
+elif label == 'CEU':
+	for s in samples:
+	#  f = open("/data1/paulk/Montgomery_Data/output/%s/isoforms.fpkm_tracking" % s)
+		f = open("/data1/paulk/Montgomery_Data/output/%s/tophat_out/genes.fpkm_tracking" % s)
+		for row in f:
+			if row[0] in unwanted: continue
+			l = row.strip().split('\t')
+			feat = l[0]
+			if (feat,l[6]) not in rna_seq_data:
+				rna_seq_data[feat,l[6]] = [float(l[9])]    # we're using the coordinates (l[6]) to make each key unique
+			else:
+				rna_seq_data[feat,l[6]] += [float(l[9])]
+		f.close()
+
+
+# fetch the required probesets
+f = open("/data2/paulk/RP/resources/probeset_to_probes.pic")
+probeset_to_probes = cPickle.load(f)
+f.close()
+
+# map probeset to probeset
+tabixfile = pysam.Tabixfile("/data2/paulk/RP/resources/HuEx-1_0-st-v2.na31.hg19.probeset.gtf.gz")
+
+for g,coord in rna_seq_data:
+	try:
+		results = tabixfile.fetch(region=coord) # perhaps try... except...
+	except ValueError:
+		continue
+	probe_int = list() # we'll pile up the intensities by probe
+	probes_present = list() # then we'll get the probes that passed DABG
+	for row in results:
+		feature = process_feature(row)
+		ps_id = int(feature['transcript_id'])
+		probes = probeset_to_probes[ps_id] # perhaps we'll have a missing ps_id?
+		for p in probes:	# for each probe get the intensity
+			try:
+				probe_int += probe_intensities[p]
+				probes_present += [p]
+			except KeyError:
+				pass
+# now we have the gene, the probes contained within its coordinates, the rna-seq expression and the probe intensities
+# write these all neatly to a file arranged as follows
+# {gene|coordinates|no_of_samples|no_of_probes|rna_seq_expr|probe_intensities as rows per probe}
+	if len(probe_int) > 0: print "\t".join([ g+"_"+coord,str(len(rna_seq_data[g,coord])),str(len(probes_present)),",".join(map(str,probes_present)),",".join(map(str,rna_seq_data[g,coord])),",".join(map(str,probe_int))])
